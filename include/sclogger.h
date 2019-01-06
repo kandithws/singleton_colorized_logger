@@ -81,7 +81,7 @@ namespace sclogger {
  * */
 void init(); // only to stdout
 void init(std::string outfile, bool append = false, bool to_stdout = true);
-void assert(bool exp, const char* exp_str, const char* file, int line, const char* message);
+void log_assert(bool exp, const char* exp_str, const char* file, int line, const char* message);
 
 /*--------------USER INTERFACE MACRO-----------------*/
 #define SCLOG_SET_VERBOSITY(LEVEL) Logger::getInstance().setVerbosityLevel(LEVEL)
@@ -98,7 +98,7 @@ void assert(bool exp, const char* exp_str, const char* file, int line, const cha
 #define SCLOG_DANGER_TAGGED(TAG, MSG, ...) Logger::getInstance().logTagged(SCLOG_VERBOSITY_DANGER, TAG, MSG, ##__VA_ARGS__)
 #define SCLOG_ERROR(MSG, ...) Logger::getInstance().log(SCLOG_VERBOSITY_ERROR, MSG, ##__VA_ARGS__)
 #define SCLOG_ERROR_TAGGED(TAG, MSG, ...) Logger::getInstance().logTagged(SCLOG_VERBOSITY_ERROR, TAG, MSG, ##__VA_ARGS__)
-#define SCLOG_ASSERT(EXP, MSG, ...) assert(EXP, #EXP,\
+#define SCLOG_ASSERT(EXP, MSG, ...) log_assert(EXP, #EXP,\
  __FILE__, __LINE__, sclogger::Logger::eval_msg(MSG, ##__VA_ARGS__).c_str() )
 
 /*
@@ -311,7 +311,7 @@ void Logger::log(int level, const char *fstr) {
 
 void Logger::writeLog(int level, const char *msg) {
   if (verbosity_level_ < 0)
-    throw std::runtime_error("Verbosity level is not set, or init() has not been called");
+    init();
 
   if (level < verbosity_level_)
     return;
@@ -410,7 +410,7 @@ class AssertionFailureException : public std::exception {
     }
 };
 
-void assert(bool exp, const char* exp_str, const char* file, int line, const char* msg){
+void log_assert(bool exp, const char* exp_str, const char* file, int line, const char* msg){
   if(!exp)
     throw AssertionFailureException(exp_str, file, line, msg);
 }
