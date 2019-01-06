@@ -16,5 +16,8 @@ int main() {
   sclogger::SCLOG_DANGER_TAGGED("MYTAG","HELLOWORLD from Logging %d %s", 4+5, "danger");
   sclogger::SCLOG_ERROR("HELLOWORLD from Logging %d", 1+2);
   sclogger::SCLOG_ERROR_TAGGED("MYTAG","HELLOWORLD from Logging %d %s", 4+5, "error");
+  sclogger::SCLOG_ASSERT(1 == 1, "ASSERT PASS");
+  sclogger::SCLOG_ASSERT(1 != 1, "ASSERT FAIL");
+  //sclogger::SCLOG_ASSERT(1 != 1, "ASSERT FAIL with ARGS %d %d", 1, 2);
   return 0;
 }

@@ -37,7 +37,7 @@
 #include <iostream>
 #include <fstream>
 #include <chrono>
-#include <stdexcept>
+#include <exception>
 #include <algorithm>
 
 #define SCLOG_ANSI_COLOR_RED     "\x1b[31m"
@@ -57,7 +57,7 @@
 #define SCLOG_COLOR_WARN SCLOG_ANSI_COLOR_YELLOW
 #define SCLOG_COLOR_DANGER SCLOG_ANSI_COLOR_RED
 #define SCLOG_COLOR_ERROR SCLOG_ANSI_COLOR_RED_BG
-
+#define SCLOG_COLOR_ASSERT SCLOG_ANSI_COLOR_RED
 // TODO -- timestamp format and output order
 
 #define SCLOG_FORMAT_STRING "[%s][%s]: %s\n" // [STAMP][LEVEL]: MESSAGE\n
@@ -69,6 +69,7 @@
 #define SCLOG_VERBOSITY_WARN 3
 #define SCLOG_VERBOSITY_DANGER 4
 #define SCLOG_VERBOSITY_ERROR 5
+#define SCLOG_VERBOSITY_ASSERT 6
 
 #define SCLOG_STDCOUT_COLOR(VERBOSITY_COLOR, MESSAGE) \
 printf("%s%s" SCLOG_ANSI_COLOR_RESET, VERBOSITY_COLOR, MESSAGE)
@@ -80,6 +81,7 @@ namespace sclogger {
  * */
 void init(); // only to stdout
 void init(std::string outfile, bool append = false, bool to_stdout = true);
+void assert(bool exp, const char* exp_str, const char* file, int line, const char* message);
 
 /*--------------USER INTERFACE MACRO-----------------*/
 #define SCLOG_SET_VERBOSITY(LEVEL) Logger::getInstance().setVerbosityLevel(LEVEL)
@@ -96,11 +98,14 @@ void init(std::string outfile, bool append = false, bool to_stdout = true);
 #define SCLOG_DANGER_TAGGED(TAG, MSG, ...) Logger::getInstance().logTagged(SCLOG_VERBOSITY_DANGER, TAG, MSG, ##__VA_ARGS__)
 #define SCLOG_ERROR(MSG, ...) Logger::getInstance().log(SCLOG_VERBOSITY_ERROR, MSG, ##__VA_ARGS__)
 #define SCLOG_ERROR_TAGGED(TAG, MSG, ...) Logger::getInstance().logTagged(SCLOG_VERBOSITY_ERROR, TAG, MSG, ##__VA_ARGS__)
+#define SCLOG_ASSERT(EXP, MSG, ...) assert(EXP, #EXP,\
+ __FILE__, __LINE__, sclogger::Logger::eval_msg(MSG, ##__VA_ARGS__).c_str() )
 
 /*
  *  IMPLEMENTATION
  *
  */
+
 class Logger {
   public:
     static Logger &getInstance();
@@ -109,6 +114,7 @@ class Logger {
     void setVerbosityLevel(int level) { verbosity_level_ = level; }
     void setVerbosityLevel(std::string level) { verbosity_level_ = getVerbosityFromString(level); }
     int getVerbosityLevel() const { return verbosity_level_; }
+    void closeLogfile();
     void init();
 
     template<typename T, typename... Args>
@@ -121,6 +127,22 @@ class Logger {
 
     void log(int level, const char *fstr);
 
+    template<typename T, typename... Args>
+    static std::ostream &mprintf(std::ostream &ostr,
+                          const char *fstr, const T &x) throw();
+
+    template<typename T, typename... Args>
+    static std::ostream &mprintf(std::ostream &ostr,
+                          const char *fstr, const T &x, Args... args) throw();
+
+    template<typename T, typename... Args>
+    static std::string eval_msg(const char *fstr, const T &x, Args... args) throw();
+
+    //for overloading purpose on pre-processors macro
+    static std::string eval_msg(const char *fstr) { return std::string(fstr); }
+
+    static std::string getTimeStamp();
+
   private:
     Logger();
     ~Logger();
@@ -129,24 +151,11 @@ class Logger {
     std::mutex log_mutex_;
     bool to_stdout_ = true;
 
-    std::string verbosity_map_[6] = {"DEBUG", "INFO", "SUCCESS", "WARN", "DANGER", "ERROR"};
+    std::string verbosity_map_[7] = {"DEBUG", "INFO", "SUCCESS", "WARN", "DANGER", "ERROR", "ASSERT"};
 
     int getVerbosityFromString(std::string st);
 
-    std::string getTimeStamp();
-
     const char *getVerbosity(const int &level) const { return verbosity_map_[level].c_str(); }
-
-    template<typename T, typename... Args>
-    std::string eval_msg(const char *fstr, const T &x, Args... args) throw();
-
-    template<typename T, typename... Args>
-    std::ostream &mprintf(std::ostream &ostr,
-                          const char *fstr, const T &x) throw();
-
-    template<typename T, typename... Args>
-    std::ostream &mprintf(std::ostream &ostr,
-                          const char *fstr, const T &x, Args... args) throw();
 
     void writeLog(int level, const char *fstr);
 };
@@ -165,6 +174,8 @@ void init(std::string outfile, bool append, bool to_stdout) {
   init();
 }
 
+
+
 //----------------------------------------------------------------
 Logger &Logger::getInstance() {
   static Logger instance;
@@ -174,6 +185,10 @@ Logger &Logger::getInstance() {
 Logger::Logger() {}
 
 Logger::~Logger() {
+  closeLogfile();
+}
+
+void Logger::closeLogfile() {
   if (log_file_)
     log_file_.close();
 }
@@ -317,6 +332,8 @@ void Logger::writeLog(int level, const char *msg) {
         break;
       case SCLOG_VERBOSITY_ERROR: SCLOG_STDCOUT_COLOR(SCLOG_COLOR_ERROR, msg);
         break;
+      case SCLOG_VERBOSITY_ASSERT: // No print here only to log
+        break;
       default: std::cout << msg;
         break;
     }
@@ -325,6 +342,77 @@ void Logger::writeLog(int level, const char *msg) {
   if (log_file_.is_open()) {
     log_file_ << msg;
   }
+}
+
+/* Log assertion. credit: https://www.softwariness.com/articles/assertions-in-cpp/ */
+class AssertionFailureException : public std::exception {
+  private:
+    const char *expression;
+    const char *file;
+    int line;
+    std::string message;
+    std::string report;
+
+  public:
+
+    /// Construct an assertion failure exception
+    AssertionFailureException(const char *expression, const char *file, int line, const std::string &message)
+        : expression(expression), file(file), line(line), message(message) {
+      std::ostringstream outputStream;
+
+      if (!message.empty()) {
+        outputStream << message << " \n ";
+      }
+
+      std::string expressionString = expression;
+
+      if (expressionString == "false" || expressionString == "0" || expressionString == "FALSE") {
+        outputStream << "Unreachable code assertion";
+      } else {
+        outputStream << "Assertion '" << expression << "'";
+      }
+
+      outputStream << " failed in file '" << file << "', line " << line;
+      std::string tmp_report = outputStream.str();
+      Logger::getInstance().log(SCLOG_VERBOSITY_ASSERT, tmp_report.c_str());
+      Logger::getInstance().closeLogfile();
+      outputStream << ", Timestamp " << Logger::getTimeStamp();
+      report = outputStream.str();
+    }
+
+    /// The assertion message
+    virtual const char *what() const throw() {
+      return report.c_str();
+    }
+
+    /// The expression which was asserted to be true
+    const char *Expression() const throw() {
+      return expression;
+    }
+
+    /// Source file
+    const char *File() const throw() {
+      return file;
+    }
+
+    /// Source line
+    int Line() const throw() {
+      return line;
+    }
+
+    /// Description of failure
+    const char *Message() const throw() {
+      return message.c_str();
+    }
+
+    ~AssertionFailureException() throw() {
+
+    }
+};
+
+void assert(bool exp, const char* exp_str, const char* file, int line, const char* msg){
+  if(!exp)
+    throw AssertionFailureException(exp_str, file, line, msg);
 }
 
 }
